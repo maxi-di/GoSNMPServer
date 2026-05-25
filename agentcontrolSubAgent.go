@@ -1,10 +1,15 @@
 package GoSNMPServer
 
-import "strings"
-import "fmt"
-import "sort"
-import "github.com/maxi-di/gosnmp"
-import "github.com/pkg/errors"
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/maxi-di/gosnmp"
+	"github.com/pkg/errors"
+)
+
+type FuncPDUOnNil func(oid string)
 
 type SubAgent struct {
 	// ContextName selects from SNMPV3 ContextName or SNMPV1/V2c community for switch from SubAgent...
@@ -20,14 +25,16 @@ type SubAgent struct {
 
 	Logger ILogger
 
+	OnNil FuncPDUOnNil
+
 	master *MasterAgent
 }
 
 func (t *SubAgent) SyncConfig() error {
 	sort.Sort(byOID(t.OIDs))
-	t.Logger.Infof("Total OIDs of %v: %v", t.CommunityIDs, len(t.OIDs))
+	// t.Logger.Infof("Total OIDs of %v: %v", t.CommunityIDs, len(t.OIDs))
 	for id, each := range t.OIDs {
-		t.Logger.Infof("OIDs of %v: %v", t.CommunityIDs, each.OID)
+		// t.Logger.Infof("OIDs of %v: %v", t.CommunityIDs, each.OID)
 		if id != 0 && t.OIDs[id].OID == t.OIDs[id-1].OID {
 			verr := fmt.Sprintf("community %v: meet duplicate oid %v", t.CommunityIDs, each.OID)
 			t.Logger.Errorf(verr)
@@ -38,6 +45,24 @@ func (t *SubAgent) SyncConfig() error {
 }
 
 func (t *SubAgent) Serve(i *gosnmp.SnmpPacket) (*gosnmp.SnmpPacket, error) {
+	// В оригинальной версии этот код был только в t.serveGetRequest
+	// Но если делать set запрос из библиотеки snmp++, то чтобы узнать engineid
+	// она присылает пустой запрос типа set, а вот net-snmp в таком случае
+	// присылает get запрос. Все эти случаи описвны в RFC
+	if i.Version == gosnmp.Version3 && len(i.Variables) == 0 {
+		// SNMP V3 hello packet
+		//
+		ret := copySnmpPacket(i)
+		ret.PDUType = gosnmp.GetResponse
+		ret.Variables = []gosnmp.SnmpPDU{}
+
+		mb, _ := t.master.getUsmSecurityParametersFromUser("")
+		ret.SecurityParameters = mb
+		ret.PDUType = gosnmp.Report
+		ret.Variables = append(ret.Variables, t.getPDUHelloVariable())
+		return &ret, nil
+	}
+
 	switch i.PDUType {
 	case gosnmp.GetRequest:
 		return t.serveGetRequest(i)
@@ -65,6 +90,7 @@ func (t *SubAgent) getPDU(Name string, Type gosnmp.Asn1BER, Value interface{}) g
 		Logger: &SnmpLoggerAdapter{t.Logger},
 	}
 }
+
 func (t *SubAgent) getPDUHelloVariable() gosnmp.SnmpPDU {
 	// Return a variable. Usually for failture login try count.
 	//   1.3.6.1.6.3.15.1.1.4.0 => http://oidref.com/1.3.6.1.6.3.15.1.1.4.0
@@ -109,7 +135,8 @@ func (t *SubAgent) getPDUOctetString(Name, str string) gosnmp.SnmpPDU {
 }
 
 func (t *SubAgent) getForPDUValueControlResult(item *PDUValueControlItem,
-	i *gosnmp.SnmpPacket) (pdu gosnmp.SnmpPDU, errret gosnmp.SNMPError) {
+	i *gosnmp.SnmpPacket,
+) (pdu gosnmp.SnmpPDU, errret gosnmp.SNMPError) {
 	if t.checkPermission(item, i) != PermissionAllowanceAllowed {
 		return t.getPDUNil(item.OID), gosnmp.NoAccess
 	}
@@ -151,14 +178,7 @@ func (t *SubAgent) serveGetRequest(i *gosnmp.SnmpPacket) (*gosnmp.SnmpPacket, er
 	ret.PDUType = gosnmp.GetResponse
 	ret.Variables = []gosnmp.SnmpPDU{}
 	t.Logger.Debugf("i.Version == %v len(i.Variables) = %v.", i.Version, len(i.Variables))
-	if i.Version == gosnmp.Version3 && len(i.Variables) == 0 {
-		// SNMP V3 hello packet
-		mb, _ := t.master.getUsmSecurityParametersFromUser("")
-		ret.SecurityParameters = mb
-		ret.PDUType = gosnmp.Report
-		ret.Variables = append(ret.Variables, t.getPDUHelloVariable())
-		return &ret, nil
-	}
+
 	for id, varItem := range i.Variables {
 		item, _ := t.getForPDUValueControl(varItem.Name)
 		if item == nil {
@@ -179,11 +199,19 @@ func (t *SubAgent) serveGetRequest(i *gosnmp.SnmpPacket) (*gosnmp.SnmpPacket, er
 	}
 
 	return &ret, nil
-
 }
 
 func (t *SubAgent) serveGetNextRequest(i *gosnmp.SnmpPacket) (*gosnmp.SnmpPacket, error) {
 	var ret gosnmp.SnmpPacket = copySnmpPacket(i)
+
+	if i.PDUType == gosnmp.GetBulkRequest && len(i.Variables) == 0 {
+		mb, _ := t.master.getUsmSecurityParametersFromUser("")
+		ret.SecurityParameters = mb
+		ret.PDUType = gosnmp.Report
+		ret.Variables = append(ret.Variables, t.getPDUHelloVariable())
+		return &ret, nil
+
+	}
 
 	ret.PDUType = gosnmp.GetResponse
 	ret.Variables = []gosnmp.SnmpPDU{}
@@ -242,13 +270,20 @@ func (t *SubAgent) serveGetNextRequest(i *gosnmp.SnmpPacket) (*gosnmp.SnmpPacket
 }
 
 // serveSetRequest for SetReqeust.
-//                 will just Return  GetResponse for Fullily SUCCESS
+//
+//	will just Return  GetResponse for Fullily SUCCESS
 func (t *SubAgent) serveSetRequest(i *gosnmp.SnmpPacket) (*gosnmp.SnmpPacket, error) {
 	var ret gosnmp.SnmpPacket = copySnmpPacket(i)
 	ret.PDUType = gosnmp.GetResponse
 	ret.Variables = []gosnmp.SnmpPDU{}
 	for id, varItem := range i.Variables {
 		item, _ := t.getForPDUValueControl(varItem.Name)
+		if item == nil {
+			if t.OnNil != nil {
+				t.OnNil(varItem.Name)
+			}
+			item, _ = t.getForPDUValueControl(varItem.Name)
+		}
 		if item == nil {
 			if ret.Error == gosnmp.NoError {
 				ret.Error = gosnmp.NoSuchName
@@ -314,5 +349,6 @@ func (t *SubAgent) getForPDUValueControl(oid string) (*PDUValueControlItem, int)
 			return t.OIDs[i], i
 		}
 	}
+	t.Logger.Warnf("PDUValueControl not found for '%s'", oid)
 	return nil, i
 }
