@@ -1,7 +1,7 @@
 package GoSNMPServer
 
 import "net"
-import "github.com/slayercat/gosnmp"
+import "github.com/maxi-di/gosnmp"
 import "github.com/pkg/errors"
 
 // PermissionAllowance  ENUM controls for Allowance

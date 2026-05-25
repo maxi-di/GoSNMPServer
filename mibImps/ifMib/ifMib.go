@@ -1,6 +1,6 @@
 package ifMib
 
-import "github.com/slayercat/GoSNMPServer"
+import "github.com/maxi-di/GoSNMPServer"
 
 func init() {
 	g_Logger = GoSNMPServer.NewDiscardLogger()

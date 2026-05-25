@@ -3,7 +3,7 @@ package mibImps
 import (
 	"bytes"
 	"github.com/sirupsen/logrus"
-	"github.com/slayercat/gosnmp"
+	"github.com/maxi-di/gosnmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"net"
@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-import "github.com/slayercat/GoSNMPServer"
+import "github.com/maxi-di/GoSNMPServer"
 
 type SnmpServerTestSuite struct {
 	suite.Suite

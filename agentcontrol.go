@@ -4,7 +4,7 @@ import "time"
 import "reflect"
 import "github.com/shirou/gopsutil/host"
 
-import "github.com/slayercat/gosnmp"
+import "github.com/maxi-di/gosnmp"
 import "github.com/pkg/errors"
 
 type FuncGetAuthoritativeEngineTime func() uint32

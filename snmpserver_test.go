@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"github.com/slayercat/gosnmp"
+	"github.com/maxi-di/gosnmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"net"
